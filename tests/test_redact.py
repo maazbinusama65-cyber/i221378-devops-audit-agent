@@ -40,3 +40,24 @@ def test_find_secrets_reports_lines_not_values():
 def test_partial_key_prefixes_with_ellipsis_are_masked():
     assert "AIza" not in redact('key is "AIzaSyC..." in config')
     assert "ghp_" not in redact("starts with ghp_ab…")
+
+
+def test_env_lookup_with_literal_default_is_masked():
+    fake = "AQ." + "Zx9" * 14
+    out = redact(f'GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "{fake}")')
+    assert fake not in out and 'os.getenv("GEMINI_API_KEY", "[REDACTED]")' in out
+    assert "Zx9Zx9" not in redact('token = os.environ.get("API_TOKEN", "Qw3rty9Uiop8Asdf")')
+    assert "Qw3rty" not in redact('const k = process.env.API_KEY || "Qw3rty9Uiop8Asdf"')
+
+
+def test_env_lookup_without_literal_or_with_placeholder_is_kept():
+    for line in ('k = os.getenv("API_KEY")', 'k = os.getenv("API_KEY", "")', 'k = os.getenv("API_KEY", "changeme")',
+                 'k = os.getenv("API_KEY", default_value)'):
+        assert redact(line) == line
+
+
+def test_new_format_google_key_is_masked_and_found():
+    fake = "AQ." + "Zx9" * 14
+    assert fake not in redact(f"see {fake} here")
+    assert [h.line for h in find_secrets(f"a\nKEY={fake}\n")] == [2]
+    assert find_secrets('k = os.getenv("API_KEY", "Qw3rty9Uiop8Asdf")')

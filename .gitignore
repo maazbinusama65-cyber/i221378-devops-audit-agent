@@ -16,6 +16,6 @@ htmlcov/
 # Local runs
 report.json
 *.trace.jsonl
-!sample_report.trace.jsonl
+!sample_report.json.trace.jsonl
 .idea/
 .vscode/

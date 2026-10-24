@@ -21,6 +21,7 @@ _TOKEN_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("GitHub token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b")),
     ("Slack token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b")),
     ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("Google API key (new format)", re.compile(r"\bAQ\.[A-Za-z0-9_-]{20,}")),
     ("Stripe key", re.compile(r"\b[sr]k_live_[0-9A-Za-z]{16,}\b")),
     ("OpenAI-style key", re.compile(r"\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}\b")),
     ("Groq key", re.compile(r"\bgsk_[A-Za-z0-9]{20,}\b")),
@@ -42,6 +43,21 @@ _ASSIGNMENT = re.compile(
     )
     (?P<quote>["']?)
     (?P<value>[^\s"'#,;`]{6,})
+    """
+)
+
+# Literal fallback in an env lookup: os.getenv("API_KEY", "literal"), process.env.TOKEN || "literal".
+_ENV_DEFAULT = re.compile(
+    r"""(?ix)
+    (?P<prefix>
+        (?:getenv|environ\.get|env\.get|config\.get|\.get)\(\s*["'][^"']*
+        (?:key|secret|token|password|passwd|credential)[^"']*["']\s*,\s*
+      |
+        process\.env\.\w*(?:key|secret|token|password|credential)\w*\s*(?:\|\||\?\?)\s*
+    )
+    (?P<quote>["'])
+    (?P<value>[^"']{6,})
+    (?P=quote)
     """
 )
 
@@ -98,7 +114,12 @@ def redact(text: str) -> str:
             return match.group(0)
         return f"{match.group('prefix')}{match.group('quote')}{REDACTED}"
 
-    return _ASSIGNMENT.sub(_mask_assignment, text)
+    def _mask_env_default(match: re.Match[str]) -> str:
+        if _is_placeholder(match.group("value")):
+            return match.group(0)
+        return f"{match.group('prefix')}{match.group('quote')}{REDACTED}{match.group('quote')}"
+
+    return _ASSIGNMENT.sub(_mask_assignment, _ENV_DEFAULT.sub(_mask_env_default, text))
 
 
 def find_secrets(text: str) -> list[SecretHit]:
@@ -118,8 +139,8 @@ def find_secrets(text: str) -> list[SecretHit]:
                 break
         if matched:
             continue
-        for match in _ASSIGNMENT.finditer(line):
-            if not _is_placeholder(match.group("value")):
+        for pattern in (_ENV_DEFAULT, _ASSIGNMENT):
+            if any(not _is_placeholder(m.group("value")) for m in pattern.finditer(line)):
                 hits.append(SecretHit(number, "credential-like assignment"))
                 break
     return hits

@@ -194,7 +194,7 @@ whether CI runs tests and whether the gate can actually fail.
 * **No repository code is executed.** All tools only read text; `ruff` is a static analyser.
 * `read_file` rejects absolute paths, `..`, and symlinks; files over 1 MB or binary are refused.
 * Secrets: `redact.py` masks known token formats (AWS, GitHub, Slack, Google, Stripe, OpenAI-style,
-  Groq, JWTs, URL passwords, private keys) and `name = "value"` credential assignments in **tool
+  Groq, new-format Google keys, JWTs, URL passwords, private keys), literal fallbacks in `os.getenv("KEY", "literal")` and `name = "value"` credential assignments in **tool
   output, prompts, traces, logs and the report**. The runtime LLM API key is scrubbed as well.
 * Errors (missing files, invalid regex, LLM rate limits/timeouts, unparsable YAML, invalid JSON from
   the model) are handled and surfaced to the model or as warnings, never as crashes.
