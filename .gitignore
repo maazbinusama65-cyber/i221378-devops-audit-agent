@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secrets / local config
+.env
+!.env.example
+
+# Local runs
+report.json
+*.trace.jsonl
+!sample_report.trace.jsonl
+.idea/
+.vscode/
