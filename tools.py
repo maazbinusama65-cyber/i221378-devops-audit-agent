@@ -22,7 +22,7 @@ from workflows import summarize_workflow
 
 MAX_READ_BYTES = 1_000_000
 MAX_READ_LINES = 400
-MAX_OUTPUT_CHARS = 9_000
+MAX_OUTPUT_CHARS = 6_000
 GIT_TIMEOUT = 30
 RUFF_TIMEOUT = 60
 

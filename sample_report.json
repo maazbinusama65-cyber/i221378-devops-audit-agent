@@ -1,0 +1,45 @@
+{
+  "repository": "https://github.com/maazbinusama65-cyber/AI-Engineer-Task",
+  "violations": [
+    {
+      "rule_id": "SEC-001",
+      "category": "security",
+      "severity": "critical",
+      "file": "config.py",
+      "line": 4,
+      "description": "Hardcoded Gemini API key committed as default value in config.py",
+      "evidence": "config.py line 4: GEMINI_API_KEY = os.getenv(\"GEMINI_API_KEY\", \"[REDACTED]\"), a real-looking API key is the fallback default. The .env.example correctly uses a placeholder, but the actual key is in source control.",
+      "recommendation": "Remove the hardcoded key from config.py immediately. Rotate/revoke the exposed API key in Google AI Studio. Use os.getenv(\"GEMINI_API_KEY\") with no default, or raise an error if the env var is missing."
+    },
+    {
+      "rule_id": "DEP-003",
+      "category": "dependency_management",
+      "severity": "medium",
+      "file": "requirements.txt",
+      "line": 1,
+      "description": "Dependencies use minimum version (>=) instead of exact pin (==)",
+      "evidence": "requirements.txt: requests>=2.31.0, beautifulsoup4>=4.12.0, pydantic>=2.5.0, google-generativeai>=0.5.0. No lockfile exists. Minimum version constraints allow incompatible future releases.",
+      "recommendation": "Pin exact versions (==) in requirements.txt, or use a lockfile tool (pip-tools, Poetry, uv) to generate a reproducible lockfile."
+    },
+    {
+      "rule_id": "REPO-003",
+      "category": "repository_hygiene",
+      "severity": "medium",
+      "file": "__pycache__/config.cpython-314.pyc",
+      "line": null,
+      "description": "11 compiled .pyc files are tracked in git despite .gitignore covering __pycache__/ and *.pyc",
+      "evidence": "git log shows .pyc files were added in commit e85bc19 and modified in aad0373. .gitignore contains __pycache__/ and *.pyc but the files were committed before or force-added. Files: __pycache__/*.pyc (6) and tests/__pycache__/*.pyc (5).",
+      "recommendation": "Remove all .pyc files from git tracking: git rm -r --cached __pycache__ tests/__pycache__, then commit. The .gitignore already covers them."
+    },
+    {
+      "rule_id": "TEST-003",
+      "category": "testing",
+      "severity": "medium",
+      "file": null,
+      "line": null,
+      "description": "No CI/CD pipeline exists to run tests or any validation",
+      "evidence": "No .github/workflows directory exists. No Makefile, tox.ini, or other CI configuration found. Tests exist in tests/ but are never executed automatically.",
+      "recommendation": "Add a GitHub Actions workflow that runs pytest on push/PR to main. At minimum: python -m pytest tests/ -v."
+    }
+  ]
+}

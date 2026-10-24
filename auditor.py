@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
-from llm import LLMError, Message
+from llm import ContextTooLarge, LLMError, Message
 from prompts import FINALISE_PROMPT, VERIFY_INSTRUCTIONS, build_system_prompt, format_observation, format_tool_results
 from redact import redact
 from schema import deduplicate, normalise_violation
@@ -25,14 +25,27 @@ class Completer(Protocol):
     def complete(self, messages: list[Message], max_tokens: int = ...) -> str: ...
 
 
+# Inspection areas and the tool that evidences having looked at them. Used only to challenge a
+# premature "done": the model may still answer that an area does not apply to this repository.
+COVERAGE_TOOLS = {
+    "tracked temporary/generated/local files and .gitignore suitability": "find_tracked_artifacts",
+    "credentials and secrets": "scan_secrets",
+    "CI/CD workflows (or the absence of any CI)": "analyze_workflow",
+    "commit history": "git_log",
+}
+MIN_STEPS_BEFORE_DONE = 5
+MAX_PUSHBACKS = 2
+
+
 @dataclass
 class AuditConfig:
     max_steps: int = 24
     max_tool_calls: int = 70
     max_calls_per_turn: int = 4
-    time_budget_s: float = 900.0
-    context_chars: int = 60_000
-    keep_recent_messages: int = 6
+    time_budget_s: float = 1500.0
+    context_chars: int = 22_000
+    min_context_chars: int = 9_000
+    keep_recent_messages: int = 4
     max_parse_failures: int = 3
     verify: bool = True
 
@@ -100,6 +113,9 @@ class AuditAgent:
         self.findings: list[dict[str, Any]] = []
         self.trace: list[dict[str, Any]] = []
         self.warnings: list[str] = []
+        self.memory = ""
+        self.used_tools: set[str] = set()
+        self._pushbacks = 0
         self._tool_calls = 0
         self._call_counts: dict[str, int] = {}
 
@@ -120,7 +136,7 @@ class AuditAgent:
                 break
             self._compress_context()
             try:
-                reply = self.llm.complete(self.messages)
+                reply = self._ask()
             except LLMError as exc:
                 if step == 0 and not self.findings:
                     raise
@@ -141,13 +157,23 @@ class AuditAgent:
                     "object described in the protocol.")})
                 continue
             parse_failures = 0
-            self.messages.append({"role": "assistant", "content": json.dumps(action, ensure_ascii=False)[:6000]})
+            self.messages.append({"role": "assistant", "content": self._compact_action(action)})
 
             thought = redact(str(action.get("thought", "")))[:600]
             self._log(f"[step {step}] {thought[:160]}")
+            if isinstance(action.get("notes"), str) and action["notes"].strip():
+                self.memory = redact(action["notes"].strip())[:1200]
             notes = self._record_findings(action.get("record_findings"), step)
             calls = self._plan_calls(action.get("tool_calls"), notes)
             if action.get("done") is True and not calls:
+                challenge = self._premature_done(step)
+                if challenge:
+                    notes.append(challenge)
+                    self.trace.append({"step": step, "event": "done_challenged"})
+                    self.messages.append({"role": "user", "content": format_tool_results(
+                        [], self._ledger(), notes, self.cfg.max_steps - step, self.memory,
+                        sorted(self.tools.inspected))})
+                    continue
                 finished = True
                 self.trace.append({"step": step, "event": "done", "thought": thought})
                 break
@@ -156,7 +182,8 @@ class AuditAgent:
                              "Call a tool to continue, or reply with done=true to finish.")
             results = self._execute(calls, step, thought)
             self.messages.append({"role": "user", "content": format_tool_results(
-                results, self._ledger(), notes, self.cfg.max_steps - step)})
+                results, self._ledger(), notes, self.cfg.max_steps - step,
+                self.memory, sorted(self.tools.inspected))})
 
         if not finished and not llm_failed:
             self._finalise(step)
@@ -164,6 +191,35 @@ class AuditAgent:
         return AuditResult(violations=violations, trace=self.trace, steps=step,
                            tool_calls=self._tool_calls, llm_calls=getattr(self.llm, "calls", 0),
                            warnings=self.warnings)
+
+    @staticmethod
+    def _compact_action(action: dict[str, Any]) -> str:
+        """Keep the model's own turn in history, but bounded (findings live in the ledger)."""
+        compact: dict[str, Any] = {"thought": redact(str(action.get("thought", "")))[:300]}
+        if isinstance(action.get("tool_calls"), list):
+            compact["tool_calls"] = action["tool_calls"][:4]
+        if action.get("record_findings"):
+            compact["record_findings"] = f"{len(action['record_findings'])} finding(s) submitted (see ledger)"
+        if action.get("done") is True:
+            compact["done"] = True
+        return redact(json.dumps(compact, ensure_ascii=False))[:1500]
+
+    def _premature_done(self, step: int) -> str | None:
+        """Challenge a "done" that comes before several inspection areas were touched."""
+        if self._pushbacks >= MAX_PUSHBACKS:
+            return None
+        missing = [area for area, tool in COVERAGE_TOOLS.items() if tool not in self.used_tools]
+        if step >= MIN_STEPS_BEFORE_DONE and len(missing) < 3:
+            return None
+        if not missing:
+            return None
+        self._pushbacks += 1
+        return ("You declared done, but no tool has yet examined: " + "; ".join(missing) + ". "
+                "Decide for each whether it applies to THIS repository. Check what is relevant (a missing "
+                "CI setup, tracked generated files, missing tests or lint, unpinned dependencies and "
+                "exposed credentials are all findings when the evidence is there), record findings you can "
+                "support, and only then finish. If an area truly does not apply, say so in your notes "
+                "and reply done=true again.")
 
     # -------------------------------------------------------------- tool calls
     def _plan_calls(self, raw: Any, notes: list[str]) -> list[tuple[str, dict[str, Any]]]:
@@ -189,7 +245,11 @@ class AuditAgent:
                           "conversation. Use a different path/range or move on.")
             else:
                 self._tool_calls += 1
+                self.used_tools.add(tool)
                 output = self.tools.dispatch(tool, args)
+                limit = max(1500, self.cfg.context_chars // (2 * max(1, len(calls))))
+                if len(output) > limit:
+                    output = output[:limit] + f"\n... [truncated to {limit} chars for the context budget]"
             self._log(f"    -> {tool}({json.dumps(args)[:100]}) = {len(output)} chars")
             self.trace.append({
                 "step": step, "event": "tool_call", "thought": thought, "tool": tool, "args": args,
@@ -235,7 +295,7 @@ class AuditAgent:
         """Budget ran out (or the loop stalled): ask once for anything still unreported."""
         self.messages.append({"role": "user", "content": FINALISE_PROMPT + "\n\nFINDINGS LEDGER:\n" + self._ledger()})
         try:
-            reply = self.llm.complete(self.messages)
+            reply = self._ask()
         except LLMError as exc:
             self.warnings.append(f"final LLM call failed: {exc}")
             return
@@ -305,19 +365,47 @@ class AuditAgent:
         return out
 
     # ----------------------------------------------------------- context budget
+    def _ask(self) -> str:
+        """Query the LLM; if the request is too large, shrink the context and retry."""
+        for _attempt in range(4):
+            self._compress_context()
+            try:
+                return self.llm.complete(self.messages)
+            except ContextTooLarge as exc:
+                new_limit = max(self.cfg.min_context_chars, int(self.cfg.context_chars * 0.6))
+                if new_limit >= self.cfg.context_chars:
+                    raise
+                self.warnings.append(f"context limit hit; shrinking history to {new_limit} chars")
+                self._log(f"    context too large ({str(exc)[:60]}); shrinking to {new_limit} chars")
+                self.cfg.context_chars = new_limit
+        raise ContextTooLarge("request still too large after shrinking the history")
+
     def _compress_context(self) -> None:
-        """Shrink old tool results so long audits stay inside the model's context window."""
-        total = sum(len(m["content"]) for m in self.messages)
-        if total <= self.cfg.context_chars:
-            return
-        frontier = len(self.messages) - self.cfg.keep_recent_messages
-        for index in range(2, max(2, frontier)):
+        """Trim old tool output (oldest first) until the transcript fits the context budget."""
+
+        def total() -> int:
+            return sum(len(m["content"]) for m in self.messages)
+
+        def trim(index: int, keep: int) -> None:
             message = self.messages[index]
-            if message["role"] == "user" and len(message["content"]) > 700 \
-                    and "TOOL RESULTS" in message["content"][:20]:
-                head = message["content"][:500]
-                tail = message["content"][message["content"].rfind("FINDINGS LEDGER:"):]
-                message["content"] = head + "\n... [older tool output trimmed to save context] ...\n" + tail
-            total = sum(len(m["content"]) for m in self.messages)
-            if total <= self.cfg.context_chars:
+            content = message["content"]
+            if message["role"] != "user" or len(content) <= keep + 200 or "FINDINGS LEDGER:" not in content:
                 return
+            tail = content[content.rfind("FINDINGS LEDGER:"):] if "FINDINGS LEDGER:" in content else ""
+            message["content"] = content[:keep] + "\n... [older tool output trimmed to save context] ...\n" + tail
+
+        if total() <= self.cfg.context_chars:
+            return
+        recent_from = max(2, len(self.messages) - self.cfg.keep_recent_messages)
+        for index in range(2, recent_from):
+            trim(index, 400)
+            if total() <= self.cfg.context_chars:
+                return
+        for index in range(recent_from, len(self.messages) - 1):
+            trim(index, 1500)
+            if total() <= self.cfg.context_chars:
+                return
+        trim(len(self.messages) - 1, max(2000, self.cfg.context_chars // 3))
+        # Last resort: forget the oldest exchange (assistant+user pair); the ledger keeps the findings.
+        while total() > self.cfg.context_chars and len(self.messages) > 4:
+            del self.messages[2:4]

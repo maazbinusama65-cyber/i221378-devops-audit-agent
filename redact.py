@@ -25,6 +25,8 @@ _TOKEN_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("OpenAI-style key", re.compile(r"\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}\b")),
     ("Groq key", re.compile(r"\bgsk_[A-Za-z0-9]{20,}\b")),
     ("JSON web token", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")),
+    ("partial key prefix", re.compile(
+        r"\b(?:AIza|AKIA|ASIA|gh[pousr]_|github_pat_|xox[abprs]-|sk-|gsk_|[sr]k_live_)[A-Za-z0-9_\-]{0,6}(?:\.{2,}|…)")),
     ("URL with embedded password", re.compile(r"(?<=://)[^/\s:@]+:[^/\s:@]{3,}(?=@[\w.-]+)")),
 ]
 

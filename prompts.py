@@ -14,6 +14,7 @@ PROTOCOL = """\
 Every reply you send MUST be a single JSON object and nothing else:
 {
   "thought": "what you observed in the last results and why you are doing the next step",
+  "notes": "your running memory: facts learned + what is still unchecked (max ~800 chars)",
   "tool_calls": [ {"tool": "<tool name>", "args": { ... }} ],
   "record_findings": [ {
       "rule_id": "SEC-001", "category": "security", "severity": "high",
@@ -24,6 +25,9 @@ Every reply you send MUST be a single JSON object and nothing else:
   } ],
   "done": false
 }
+- "notes": REPLACE your notes every turn. Old tool output is trimmed to save context, so your notes
+  and the findings ledger are your only long-term memory. Record key facts (languages, package
+  manager, CI triggers, what the workflows run, what you already ruled out) and a to-do list.
 - "tool_calls": 1-4 independent calls per turn. Omit it (or use []) when finishing.
 - "record_findings": add a finding as soon as the evidence is in front of you; the harness
   validates it against the real repository and tells you if it is rejected. Do not re-record
@@ -59,6 +63,11 @@ EVIDENCE RULES (precision matters as much as recall; false positives are penalis
   secrets stored in GitHub: those cannot be seen from files.
 - Example/template files (.env.example, test fixtures, documentation snippets, placeholder values
   like "changeme"/"your-key-here", `${{{{ secrets.X }}}}` references) are acceptable, not violations.
+- Not defects (do not report): version-tag pinning of GitHub's own actions (actions/*, github/*) or of
+  well-known publishers (docker/*); requirements.txt where every dependency is pinned with `==` (that
+  already is a reproducible spec: a lockfile is only expected for tools that have one, e.g. Poetry,
+  npm, Cargo); a missing optional file when the same purpose is served elsewhere. Only report a
+  dependency finding when you can point at the unpinned/inconsistent line.
 - Never write or quote a secret value anywhere. Describe it ("hardcoded AWS key in config.py:17").
 - Use file=null and line=null for findings about something missing (no tests, no .gitignore).
   One root cause = one finding; do not split or duplicate. Prefer fewer, well-supported findings.
@@ -92,13 +101,17 @@ def format_observation(overview: str) -> str:
 
 
 def format_tool_results(results: list[tuple[str, dict, str]], ledger: str, notes: list[str],
-                        steps_left: int) -> str:
+                        steps_left: int, memory: str = "", inspected: list[str] | None = None) -> str:
     blocks = []
     for index, (tool, args, output) in enumerate(results, start=1):
         blocks.append(f"[{index}] {tool}({json.dumps(args, ensure_ascii=False)})\n{output}")
     parts = ["TOOL RESULTS:\n" + "\n\n".join(blocks)] if blocks else []
     if notes:
         parts.append("HARNESS NOTES:\n" + "\n".join(f"- {n}" for n in notes))
+    if memory:
+        parts.append(f"YOUR NOTES (from your last turn):\n{memory}")
+    if inspected:
+        parts.append("FILES ALREADY READ OR SEARCHED: " + ", ".join(inspected[:60]))
     parts.append(f"FINDINGS LEDGER:\n{ledger}")
     parts.append(f"Steps remaining: {steps_left}. Reply with the next JSON object.")
     return "\n\n".join(parts)

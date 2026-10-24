@@ -41,7 +41,7 @@ cp .env.example .env
 | `LLM_PROVIDER` | `groq`, `openai`, `anthropic`, `gemini`, `openrouter` (autodetected from whichever key is set if omitted) |
 | `GROQ_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` | key for the chosen provider |
 | `LLM_API_KEY` + `LLM_BASE_URL` | any other OpenAI-compatible endpoint (Ollama, vLLM, Azure, ...) |
-| `LLM_MODEL` | optional model override (defaults: Groq `llama-3.3-70b-versatile`, OpenAI `gpt-4o-mini`, Anthropic `claude-sonnet-4-5`, Gemini `gemini-2.0-flash`) |
+| `LLM_MODEL` | optional model override (defaults: Groq `openai/gpt-oss-120b`, OpenAI `gpt-4o-mini`, Anthropic `claude-sonnet-4-5`, Gemini `gemini-2.0-flash`) |
 
 Real environment variables take precedence over `.env`, so the evaluator can simply export them.
 
@@ -58,7 +58,7 @@ python agent.py --repo https://github.com/example/demo-project --output report.j
 | `--trace` | `<output>.trace.jsonl` | tool-call trace (one JSON object per step) |
 | `--max-steps` | 24 | LLM reasoning-step budget |
 | `--max-tool-calls` | 70 | tool-execution budget |
-| `--time-budget` | 900 | wall-clock budget in seconds |
+| `--time-budget` | 1500 | wall-clock budget in seconds |
 | `--no-verify` | off | skip the second-opinion review pass |
 | `--quiet` | off | no progress output on stderr |
 
@@ -90,7 +90,16 @@ written** and a one-line reason is printed to stderr. Budget exhaustion or a mid
 `severity` is one of `critical|high|medium|low`; `file`/`line` are JSON `null` for findings about
 something that is absent (e.g. no tests). `violations` is `[]` when nothing defensible is found.
 Secret values are never written: everything is passed through a redactor first.
-See [`sample_report.json`](sample_report.json) for real output.
+See [`sample_report.json`](sample_report.json) for real output and
+[`sample_report.json.trace.jsonl`](sample_report.json.trace.jsonl) for the tool-call trace that produced it.
+
+**Provenance of the sample.** Generated with
+`python agent.py --repo https://github.com/maazbinusama65-cyber/AI-Engineer-Task --output sample_report.json`
+using `qwen/qwen3.8-27b` on Groq's free tier. That tier's tokens-per-minute limit cut the run short after
+6 investigation steps (the agent shrank its context, retried, then reported what it had verified and printed
+a warning), so the second-opinion review pass did not run. The four findings are real and each cites a file the
+agent had read; the credential value is redacted. With a provider that has normal rate limits the agent keeps
+investigating (tests, workflows, Dockerfiles, ...) and runs the review pass.
 
 ---
 
@@ -217,4 +226,7 @@ CI (`.github/workflows/ci.yml`) runs ruff and the test suite on every push and p
   reviews) are invisible from files and are deliberately never reported.
 * Findings quality depends on the model; weaker models may investigate less deeply. Raise
   `--max-steps` for large repositories.
-* Free-tier provider rate limits can slow a run; the client honours `Retry-After` and backs off.
+* Free-tier provider rate limits (for example Groq's 6-8k tokens per minute and daily token caps) slow runs and
+  can end them early. The client honours `Retry-After`, shrinks the context on "request too large" errors, and
+  stops immediately on an exhausted daily quota; whatever was verified so far is still reported with a warning.
+  For best results use a provider/key without such tight limits.

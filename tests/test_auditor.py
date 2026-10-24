@@ -60,7 +60,7 @@ def test_loop_selects_tools_from_observations(sample_repo):
     tools_used = [e["tool"] for e in result.trace if e["event"] == "tool_call"]
     assert tools_used == ["list_files", "analyze_workflow", "scan_secrets"]
     assert [v["rule_id"] for v in result.violations] == ["SEC-003"]
-    assert result.steps == 4 and result.tool_calls == 3
+    assert result.steps == 5 and result.tool_calls == 3  # step 4 "done" was challenged
     assert all(m["role"] in {"system", "user", "assistant"} for m in llm.transcripts[-1])
 
 
@@ -106,7 +106,7 @@ def test_json_in_code_fence_is_accepted(sample_repo):
         return "```json\n" + json.dumps({"done": True}) + "\n```"
 
     _, _, result = run_agent(sample_repo, policy)
-    assert result.steps == 1
+    assert result.steps == 3  # fenced JSON parsed; early done challenged twice, then accepted
 
 
 def test_budget_exhaustion_triggers_final_report_call(sample_repo):
@@ -233,3 +233,70 @@ def test_context_compression_keeps_recent_messages(sample_repo):
 ])
 def test_extract_json(text, expected):
     assert extract_json(text) == expected
+
+
+def test_context_too_large_shrinks_history_and_retries(sample_repo):
+    from llm import ContextTooLarge
+
+    class Tight:
+        calls = 0
+
+        def __init__(self):
+            self.sizes = []
+
+        def complete(self, messages, max_tokens=0):
+            self.calls += 1
+            size = sum(len(m["content"]) for m in messages)
+            self.sizes.append(size)
+            if size > 12_000:
+                raise ContextTooLarge("413")
+            return json.dumps({"done": True})
+
+    tools = RepoTools(sample_repo)
+    llm = Tight()
+    agent = AuditAgent(llm, tools, "x", AuditConfig(verify=False), log=lambda _m: None)
+    agent.messages.append({"role": "assistant", "content": "{}"})
+    agent.messages.append({"role": "user", "content": "TOOL RESULTS:\n" + "z" * 15_000 + "\n\nFINDINGS LEDGER:\n-"})
+    result = agent.run()
+    assert llm.sizes[-1] <= 12_000
+    assert any("shrinking history" in w for w in result.warnings)
+
+
+def test_notes_are_kept_as_memory_and_echoed_back(sample_repo):
+    seen = {}
+
+    def policy(turn, last, _m):
+        if turn == 1:
+            return {"notes": "python app; CI has pull_request_target", "tool_calls": [
+                {"tool": "read_file", "args": {"path": "README.md"}}]}
+        seen["last"] = last
+        return {"done": True}
+
+    run_agent(sample_repo, policy)
+    assert "YOUR NOTES" in seen["last"] and "pull_request_target" in seen["last"]
+    assert "FILES ALREADY READ OR SEARCHED: README.md" in seen["last"]
+
+
+def test_premature_done_is_challenged_then_model_can_insist(sample_repo):
+    messages_seen = []
+
+    def policy(turn, last, _m):
+        messages_seen.append(last)
+        return {"thought": "nothing applies", "done": True}
+
+    _, _, result = run_agent(sample_repo, policy)
+    assert result.steps == 3
+    assert "no tool has yet examined" in messages_seen[1] and "scan_secrets" not in messages_seen[1]
+    assert "credentials and secrets" in messages_seen[1]
+    assert sum(e["event"] == "done_challenged" for e in result.trace) == 2
+
+
+def test_done_accepted_without_challenge_after_coverage(sample_repo):
+    def policy(turn, last, _m):
+        if turn == 1:
+            return {"tool_calls": [{"tool": t, "args": {}} for t in
+                                   ("find_tracked_artifacts", "scan_secrets", "analyze_workflow", "git_log")]}
+        return {"done": True}
+
+    _, _, result = run_agent(sample_repo, policy)
+    assert result.steps == 2

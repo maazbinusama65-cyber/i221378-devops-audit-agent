@@ -34,7 +34,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--trace", help="path for the JSONL tool-call trace (default: <output>.trace.jsonl)")
     parser.add_argument("--max-steps", type=int, default=24, help="maximum LLM reasoning steps (default 24)")
     parser.add_argument("--max-tool-calls", type=int, default=70, help="maximum tool executions (default 70)")
-    parser.add_argument("--time-budget", type=float, default=900.0, help="wall-clock budget in seconds")
+    parser.add_argument("--time-budget", type=float, default=1500.0, help="wall-clock budget in seconds (default 1500)")
     parser.add_argument("--no-verify", action="store_true", help="skip the second-opinion review of findings")
     parser.add_argument("--quiet", action="store_true", help="suppress progress output on stderr")
     return parser.parse_args(argv)

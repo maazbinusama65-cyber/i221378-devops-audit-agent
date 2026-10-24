@@ -132,3 +132,25 @@ def test_resolve_config_autodetect_and_overrides():
         resolve_config({})
     with pytest.raises(LLMError):
         resolve_config({"LLM_PROVIDER": "openai"})
+
+
+def test_llm_client_classifies_provider_errors():
+    from llm import ContextTooLarge, LLMClient
+
+    class RateLimit(Exception):
+        status_code = 429
+
+    client = LLMClient("groq", "k", "m", "https://example.invalid/v1")
+    client._retryable = (RateLimit,)
+
+    def boom(message):
+        def _once(*_a, **_k):
+            raise RateLimit(message)
+        return _once
+
+    client._once = boom("Request too large for model x on tokens per minute (TPM): Limit 8000")
+    with pytest.raises(ContextTooLarge):
+        client.complete([{"role": "system", "content": "s"}])
+    client._once = boom("Rate limit reached ... on tokens per day (TPD): Limit 200000")
+    with pytest.raises(LLMError, match="quota exhausted"):
+        client.complete([{"role": "system", "content": "s"}])

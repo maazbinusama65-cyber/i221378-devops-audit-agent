@@ -13,17 +13,22 @@ from __future__ import annotations
 import os
 import random
 import re
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any
 
-from redact import register_secret
+from redact import redact, register_secret
 
 Message = dict[str, str]
 
 
 class LLMError(RuntimeError):
     """The model could not be reached or kept failing after retries."""
+
+
+class ContextTooLarge(LLMError):
+    """The request exceeded the model's context or tokens-per-minute budget; shrink and retry."""
 
 
 @dataclass(frozen=True)
@@ -34,7 +39,7 @@ class Preset:
 
 
 PRESETS: dict[str, Preset] = {
-    "groq": Preset("GROQ_API_KEY", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
+    "groq": Preset("GROQ_API_KEY", "https://api.groq.com/openai/v1", "openai/gpt-oss-120b"),
     "openai": Preset("OPENAI_API_KEY", None, "gpt-4o-mini"),
     "anthropic": Preset("ANTHROPIC_API_KEY", None, "claude-sonnet-4-5"),
     "gemini": Preset("GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -102,7 +107,7 @@ class LLMClient:
         return cls(cfg["provider"], cfg["api_key"], cfg["model"], cfg["base_url"])
 
     # ------------------------------------------------------------------ public
-    def complete(self, messages: list[Message], max_tokens: int = 2500) -> str:
+    def complete(self, messages: list[Message], max_tokens: int = 1600) -> str:
         """Send a chat transcript (first item is the system prompt); return the reply text."""
         last_error: Exception | None = None
         json_mode = True
@@ -112,9 +117,21 @@ class LLMClient:
                 return self._once(messages, max_tokens, json_mode)
             except self._retryable as exc:
                 last_error = exc
-                time.sleep(self._backoff(exc, attempt))
+                lowered = str(exc).lower()
+                if "request too large" in lowered or "reduce your message size" in lowered:
+                    raise ContextTooLarge(f"request too large for the model: {redact(str(exc))[:200]}") from exc
+                if "per day" in lowered or "(tpd)" in lowered or "daily" in lowered or "insufficient_quota" in lowered:
+                    raise LLMError(f"LLM quota exhausted (not retryable): {redact(str(exc))[:240]}") from exc
+                delay = self._backoff(exc, attempt)
+                print(f"    LLM {type(exc).__name__}; retrying in {delay:.0f}s "
+                      f"(attempt {attempt + 1}/{self.max_retries + 1}): {redact(str(exc))[:160]}", file=sys.stderr)
+                time.sleep(delay)
             except Exception as exc:  # noqa: BLE001 - classify below
                 status = getattr(exc, "status_code", None)
+                text = str(exc).lower()
+                if status == 413 or "context length" in text or "context_length" in text \
+                        or "request too large" in text or "reduce your message size" in text:
+                    raise ContextTooLarge(f"request too large for the model: {str(exc)[:200]}") from exc
                 if status == 400 and json_mode and self.provider != "anthropic":
                     json_mode = False  # model/provider rejects response_format; retry without it
                     last_error = exc

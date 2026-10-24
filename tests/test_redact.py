@@ -35,3 +35,8 @@ def test_find_secrets_reports_lines_not_values():
     hits = find_secrets('x = 1\nTOKEN = "ghp_' + "b" * 36 + '"\n')
     assert [(h.line, h.kind) for h in hits] == [(2, "GitHub token")]
     assert find_secrets("def f(token):\n    return token\n") == []
+
+
+def test_partial_key_prefixes_with_ellipsis_are_masked():
+    assert "AIza" not in redact('key is "AIzaSyC..." in config')
+    assert "ghp_" not in redact("starts with ghp_ab…")
