@@ -281,7 +281,9 @@ class RepoTools:
             raise ToolError(f"{rel} has only {total} lines")
         self.inspected.add(rel)
         body = "\n".join(f"{n}: {all_lines[n - 1][:400]}" for n in range(start, last + 1))
-        note = f"\n[showing lines {start}-{last} of {total}; call again with start_line={last + 1}]" if last < total else ""
+        note = ""
+        if last < total:
+            note = f"\n[showing lines {start}-{last} of {total}; call again with start_line={last + 1}]"
         return f"FILE {rel} ({total} lines)\n{body}{note}" if total else f"FILE {rel} is empty"
 
     def _similar(self, rel: str) -> str | None:

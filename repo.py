@@ -12,6 +12,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 from collections import Counter
 from contextlib import contextmanager
@@ -47,6 +48,14 @@ def parse_github_url(url: str) -> tuple[str, str]:
 def _force_remove(func, path, _exc) -> None:  # noqa: ANN001 - shutil callback signature
     os.chmod(path, stat.S_IWRITE)
     func(path)
+
+
+def remove_tree(path: Path) -> None:
+    """Delete a directory tree, including read-only git objects on Windows."""
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_force_remove)
+    else:
+        shutil.rmtree(path, onerror=_force_remove)
 
 
 @contextmanager
@@ -88,7 +97,7 @@ def checkout(target: str) -> Iterator[Path]:
             raise RepoError(f"repository checkout is {size_mb:.0f} MB, above the {MAX_CHECKOUT_MB} MB limit")
         yield dest
     finally:
-        shutil.rmtree(workdir, onerror=_force_remove)
+        remove_tree(workdir)
 
 
 def build_overview(tools: RepoTools, url: str) -> str:
