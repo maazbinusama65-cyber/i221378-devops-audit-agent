@@ -154,3 +154,26 @@ def test_llm_client_classifies_provider_errors():
     client._once = boom("Rate limit reached ... on tokens per day (TPD): Limit 200000")
     with pytest.raises(LLMError, match="quota exhausted"):
         client.complete([{"role": "system", "content": "s"}])
+
+
+def test_llm_client_lowers_max_tokens_on_output_token_limit():
+    from llm import LLMClient
+
+    class RateLimit(Exception):
+        status_code = 429
+
+    client = LLMClient("groq", "k", "m", "https://example.invalid/v1")
+    client._retryable = (RateLimit,)
+    seen = []
+
+    def _once(messages, max_tokens, json_mode):
+        seen.append(max_tokens)
+        if max_tokens > 800:
+            raise RateLimit("Request too large on output tokens per minute (OTPM): Limit 1200, Requested 1600")
+        return "{}"
+
+    client._once = _once
+    assert client.complete([{"role": "system", "content": "s"}], max_tokens=1600) == "{}"
+    assert seen == [1600, 600] and client.output_cap == 600
+    client.complete([{"role": "system", "content": "s"}], max_tokens=1600)
+    assert seen[-1] == 600

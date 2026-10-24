@@ -33,6 +33,9 @@ COVERAGE_TOOLS = {
     "CI/CD workflows (or the absence of any CI)": "analyze_workflow",
     "commit history": "git_log",
 }
+MAX_IDENTICAL_CALLS = 3
+MAX_STALLED_TURNS = 2
+REPEAT_BLOCKED = "ERROR: identical call blocked"
 MIN_STEPS_BEFORE_DONE = 5
 MAX_PUSHBACKS = 2
 
@@ -116,6 +119,7 @@ class AuditAgent:
         self.memory = ""
         self.used_tools: set[str] = set()
         self._pushbacks = 0
+        self._stalled_turns = 0
         self._tool_calls = 0
         self._call_counts: dict[str, int] = {}
 
@@ -181,6 +185,12 @@ class AuditAgent:
                 notes.append("You requested no tool calls and did not set done=true. "
                              "Call a tool to continue, or reply with done=true to finish.")
             results = self._execute(calls, step, thought)
+            stalled = bool(results) and all(out.startswith(REPEAT_BLOCKED) for _t, _a, out in results)
+            self._stalled_turns = self._stalled_turns + 1 if stalled else 0
+            if self._stalled_turns >= MAX_STALLED_TURNS:
+                self.warnings.append("investigation stalled (repeated identical tool calls); finishing early")
+                self.trace.append({"step": step, "event": "stalled"})
+                break
             self.messages.append({"role": "user", "content": format_tool_results(
                 results, self._ledger(), notes, self.cfg.max_steps - step,
                 self.memory, sorted(self.tools.inspected))})
@@ -240,9 +250,9 @@ class AuditAgent:
         for tool, args in calls:
             key = f"{tool}:{json.dumps(args, sort_keys=True)}"
             self._call_counts[key] = self._call_counts.get(key, 0) + 1
-            if self._call_counts[key] > 2:
-                output = ("ERROR: identical call already made twice; its result is above in the "
-                          "conversation. Use a different path/range or move on.")
+            if self._call_counts[key] > MAX_IDENTICAL_CALLS:
+                output = (REPEAT_BLOCKED + f" (made {MAX_IDENTICAL_CALLS} times already). Rely on your notes and "
+                          "the findings ledger, use a different path/range, or finish with done=true.")
             else:
                 self._tool_calls += 1
                 self.used_tools.add(tool)

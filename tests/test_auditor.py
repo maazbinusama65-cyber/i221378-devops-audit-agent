@@ -129,7 +129,7 @@ def test_repeated_identical_calls_are_blocked(sample_repo):
         return {"done": True}
 
     _, _, result = run_agent(sample_repo, policy)
-    assert result.tool_calls == 2
+    assert result.tool_calls == 3  # the 4th identical call is blocked
 
 
 def test_tool_call_cap_per_turn(sample_repo):
@@ -300,3 +300,12 @@ def test_done_accepted_without_challenge_after_coverage(sample_repo):
 
     _, _, result = run_agent(sample_repo, policy)
     assert result.steps == 2
+
+
+def test_stalled_loop_of_blocked_repeats_stops_early(sample_repo):
+    def policy(turn, last, _m):
+        return {"tool_calls": [{"tool": "git_log", "args": {}}]}
+
+    _, _, result = run_agent(sample_repo, policy, max_steps=24)
+    assert result.steps < 10 and any("stalled" in w for w in result.warnings)
+    assert result.tool_calls == 3

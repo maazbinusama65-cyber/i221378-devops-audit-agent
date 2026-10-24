@@ -88,6 +88,7 @@ class LLMClient:
         self.temperature = temperature
         self.max_retries = max_retries
         self.calls = 0
+        self.output_cap: int | None = None
         register_secret(api_key)
         if provider == "anthropic":
             import anthropic  # imported lazily so the other backend needs no extra package
@@ -111,6 +112,8 @@ class LLMClient:
         """Send a chat transcript (first item is the system prompt); return the reply text."""
         last_error: Exception | None = None
         json_mode = True
+        if self.output_cap:
+            max_tokens = min(max_tokens, self.output_cap)
         for attempt in range(self.max_retries + 1):
             try:
                 self.calls += 1
@@ -118,6 +121,12 @@ class LLMClient:
             except self._retryable as exc:
                 last_error = exc
                 lowered = str(exc).lower()
+                if "output tokens" in lowered and "request too large" in lowered and max_tokens > 400:
+                    limit = re.search(r"limit (\d+)", lowered)
+                    max_tokens = max(300, int(limit.group(1)) // 2 if limit else max_tokens // 2)
+                    self.output_cap = max_tokens  # remembered: later calls stay under the output limit
+                    print(f"    LLM output-token limit hit; lowering max_tokens to {max_tokens}", file=sys.stderr)
+                    continue
                 if "request too large" in lowered or "reduce your message size" in lowered:
                     raise ContextTooLarge(f"request too large for the model: {redact(str(exc))[:200]}") from exc
                 if "per day" in lowered or "(tpd)" in lowered or "daily" in lowered or "insufficient_quota" in lowered:
