@@ -43,7 +43,7 @@ PRESETS: dict[str, Preset] = {
     "openai": Preset("OPENAI_API_KEY", None, "gpt-4o-mini"),
     "anthropic": Preset("ANTHROPIC_API_KEY", None, "claude-sonnet-4-5"),
     "gemini": Preset("GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/openai/",
-                     "gemini-2.0-flash"),
+                     "gemini-flash-latest"),
     "openrouter": Preset("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1", "openai/gpt-4o-mini"),
 }
 AUTODETECT_ORDER = ("groq", "openai", "anthropic", "gemini", "openrouter")
@@ -82,7 +82,7 @@ def resolve_config(env: dict[str, str] | None = None) -> dict[str, Any]:
 
 class LLMClient:
     def __init__(self, provider: str, api_key: str, model: str, base_url: str | None = None,
-                 temperature: float = 0.0, timeout: float = 90.0, max_retries: int = 6) -> None:
+                 temperature: float = 0.0, timeout: float = 150.0, max_retries: int = 6) -> None:
         self.provider = provider
         self.model = model
         self.temperature = temperature
@@ -112,6 +112,8 @@ class LLMClient:
         """Send a chat transcript (first item is the system prompt); return the reply text."""
         last_error: Exception | None = None
         json_mode = True
+        if self.provider == "gemini":
+            max_tokens = max(max_tokens, 6000)  # thinking models spend part of the budget on reasoning
         if self.output_cap:
             max_tokens = min(max_tokens, self.output_cap)
         for attempt in range(self.max_retries + 1):

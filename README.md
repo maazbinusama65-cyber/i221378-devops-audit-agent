@@ -41,7 +41,7 @@ cp .env.example .env
 | `LLM_PROVIDER` | `groq`, `openai`, `anthropic`, `gemini`, `openrouter` (autodetected from whichever key is set if omitted) |
 | `GROQ_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` | key for the chosen provider |
 | `LLM_API_KEY` + `LLM_BASE_URL` | any other OpenAI-compatible endpoint (Ollama, vLLM, Azure, ...) |
-| `LLM_MODEL` | optional model override (defaults: Groq `openai/gpt-oss-120b`, OpenAI `gpt-4o-mini`, Anthropic `claude-sonnet-4-5`, Gemini `gemini-2.0-flash`) |
+| `LLM_MODEL` | optional model override (defaults: Groq `openai/gpt-oss-120b`, OpenAI `gpt-4o-mini`, Anthropic `claude-sonnet-4-5`, Gemini `gemini-flash-latest`) |
 
 Real environment variables take precedence over `.env`, so the evaluator can simply export them.
 
